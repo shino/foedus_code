@@ -32,6 +32,8 @@ foedus::ErrorStack my_proc(const foedus::proc::ProcArguments& args) {
 
 int main(int argc, char** argv) {
   foedus::EngineOptions options;
+  options.cache_.snapshot_cache_size_mb_per_node_ = 1 << 6;
+  options.memory_.page_pool_size_mb_per_node_ = 1 << 6;
   foedus::Engine engine(options);
   engine.get_proc_manager()->pre_register(kProc, my_proc);
   COERCE_ERROR(engine.initialize());

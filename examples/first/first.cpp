@@ -30,7 +30,7 @@ foedus::ErrorStack my_proc(const foedus::proc::ProcArguments& args) {
   return foedus::kRetOk;
 }
 
-int main(int argc, char argv) {
+int main(int argc, char** argv) {
   foedus::EngineOptions options;
   foedus::Engine engine(options);
   engine.get_proc_manager()->pre_register(kProc, my_proc);

@@ -17,6 +17,7 @@ const char* kName = "myarray";
 const char* kProc = "myproc";
 
 foedus::ErrorStack my_proc(const foedus::proc::ProcArguments& args) {
+  foedus::thread::Thread* context = args.context_;
   foedus::Engine* engine = args.engine_;
   foedus::storage::array::ArrayStorage array(engine, kName);
   foedus::xct::XctManager* xct_manager = engine->get_xct_manager();

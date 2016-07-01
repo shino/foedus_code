@@ -17,14 +17,21 @@ const char* kName = "myarray";
 const char* kWriteProc = "my_write_proc";
 const char* kReadProc  = "my_read_proc";
 
+struct WriteInput {
+  ArrayOffset key;
+  const char* payload;
+  uint16_t    payload_size;
+};
+
 foedus::ErrorStack my_write_proc(const foedus::proc::ProcArguments& args) {
   foedus::thread::Thread* context = args.context_;
   foedus::Engine* engine = args.engine_;
   foedus::storage::array::ArrayStorage array(engine, kName);
   foedus::xct::XctManager* xct_manager = engine->get_xct_manager();
   WRAP_ERROR_CODE(xct_manager->begin_xct(context, foedus::xct::kSerializable));
-  char buf[kPayload] = "abcXYZ";
-  WRAP_ERROR_CODE(array.overwrite_record(context, 123, buf, 0, 7));
+  const WriteInput* input = reinterpret_cast<const WriteInput*>(args.input_buffer_);
+  WRAP_ERROR_CODE(array.overwrite_record(context, input->key,
+                                         input->payload, 0, input->payload_size - 1));
   foedus::Epoch commit_epoch;
   WRAP_ERROR_CODE(xct_manager->precommit_xct(context, &commit_epoch));
   WRAP_ERROR_CODE(xct_manager->wait_for_commit(commit_epoch));
@@ -38,13 +45,9 @@ foedus::ErrorStack my_read_proc(const foedus::proc::ProcArguments& args) {
   foedus::storage::array::ArrayStorage array(engine, kName);
   foedus::xct::XctManager* xct_manager = engine->get_xct_manager();
   WRAP_ERROR_CODE(xct_manager->begin_xct(context, foedus::xct::kSerializable));
-  char buf[kPayload];
-  WRAP_ERROR_CODE(array.get_record(context, 123, buf));
-  std::cout << "record = ";
-  for(int i=0; i<kPayload; ++i) {
-    std::cout << buf[i];
-  }
-  std::cout << std::endl;
+  const uint64_t* key = reinterpret_cast<const uint64_t*>(args.input_buffer_);
+  WRAP_ERROR_CODE(array.get_record(context, *key, args.output_buffer_));
+  *args.output_used_ = array.get_payload_size();
   foedus::Epoch commit_epoch;
   WRAP_ERROR_CODE(xct_manager->precommit_xct(context, &commit_epoch));
   WRAP_ERROR_CODE(xct_manager->wait_for_commit(commit_epoch));
@@ -64,12 +67,31 @@ int main(int argc, char** argv) {
   foedus::Epoch create_epoch;
   foedus::storage::array::ArrayMetadata meta(kName, kPayload, kRecords);
   COERCE_ERROR(engine.get_storage_manager()->create_storage(&meta, &create_epoch));
-  foedus::ErrorStack result_write = engine.get_thread_pool()->impersonate_synchronous(kWriteProc);
+
+  foedus::thread::ImpersonateSession write_session;
+  const WriteInput input = {123, "abcXYZ", 7};
+  bool ret_write =
+    engine.get_thread_pool()->impersonate(kWriteProc, &input, sizeof(input), &write_session);
+  ASSERT_ND(ret_write);
+  const foedus::ErrorStack result_write = write_session.get_result();
   std::cout << "result_write=" << result_write << std::endl;
-  foedus::ErrorStack result_read = engine.get_thread_pool()->impersonate_synchronous(kReadProc);
+  write_session.release();
+
+  foedus::thread::ImpersonateSession read_session;
+  bool ret_read = engine.get_thread_pool()->impersonate(kReadProc, &input.key, sizeof(input.key), &read_session);
+  ASSERT_ND(ret_read);
+  foedus::ErrorStack result_read = read_session.get_result();
   std::cout << "result_read=" << result_read << std::endl;
+  std::cout << "output_size=" << read_session.get_output_size() << std::endl;
+  const char* record = reinterpret_cast<const char*>(read_session.get_raw_output_buffer());
+  std::cout << "record read=" << record << " (";
+  for(int i=0; i < read_session.get_output_size(); ++i) {
+    std::cout << static_cast<uint64_t>(record[i]) << ", ";
+  }
+  std::cout << ")" << std::endl;
+  read_session.release();
+
   COERCE_ERROR(engine.uninitialize());
 
   return 0;
 }
-

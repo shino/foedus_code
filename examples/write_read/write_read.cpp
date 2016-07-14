@@ -18,7 +18,7 @@ const char* kWriteProc = "my_write_proc";
 const char* kReadProc  = "my_read_proc";
 
 struct WriteInput {
-  ArrayOffset key;
+  uint64_t key;
   const char* payload;
   uint16_t    payload_size;
 };

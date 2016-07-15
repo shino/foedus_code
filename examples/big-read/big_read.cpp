@@ -1,5 +1,6 @@
 #include <iostream>
 
+#include "foedus/debugging/stop_watch.hpp"
 #include "foedus/engine.hpp"
 #include "foedus/engine_options.hpp"
 #include "foedus/epoch.hpp"
@@ -13,17 +14,12 @@
 
 const uint16_t kPayload = 16;
 const uint32_t kRecords = 1 << 20;
-// const uint32_t kCount = 2;
-// const uint32_t kCount = 1000;    // 1k
-const uint32_t kCount = 1000000; // 1m
 const char* kName = "myarray";
 const char* kWriteProc = "my_write_proc";
 const char* kReadProc  = "my_read_proc";
 
 struct WriteInput {
-  uint64_t key;
-  const char* payload;
-  uint16_t    payload_size;
+  uint64_t key_count;
 };
 
 foedus::ErrorStack my_write_proc(const foedus::proc::ProcArguments& args) {
@@ -33,7 +29,8 @@ foedus::ErrorStack my_write_proc(const foedus::proc::ProcArguments& args) {
   foedus::xct::XctManager* xct_manager = engine->get_xct_manager();
   WRAP_ERROR_CODE(xct_manager->begin_xct(context, foedus::xct::kSerializable));
   const WriteInput* input = reinterpret_cast<const WriteInput*>(args.input_buffer_);
-  for(uint64_t key=0ULL; key<kCount; ++key){
+  std::cout << "write key_count=" << input->key_count << std::endl;
+  for(uint64_t key=0ULL; key < input->key_count; ++key){
     WRAP_ERROR_CODE(array.overwrite_record(context, key, "xxxxx", 0, 5));
   }
   foedus::Epoch commit_epoch;
@@ -48,15 +45,16 @@ foedus::ErrorStack my_read_proc(const foedus::proc::ProcArguments& args) {
   foedus::storage::array::ArrayStorage array(engine, kName);
   foedus::xct::XctManager* xct_manager = engine->get_xct_manager();
   WRAP_ERROR_CODE(xct_manager->begin_xct(context, foedus::xct::kSerializable));
-  const uint64_t* key = reinterpret_cast<const uint64_t*>(args.input_buffer_);
+  const uint64_t* key_count = reinterpret_cast<const uint64_t*>(args.input_buffer_);
+  std::cout << "read key_count=" << *key_count << std::endl;
   uint64_t total = 0;
   char buf[kPayload];
-  for(uint64_t key=0ULL; key<kCount; ++key){
+  for(uint64_t key=0ULL; key < *key_count; ++key){
     WRAP_ERROR_CODE(array.get_record(context, key, buf));
-  std::cout << "*************** key=" << key << std::endl;
-    total += (key + 1);
+  // std::cout << "*************** key=" << key << std::endl;
+    total += 1;
   }
-  std::cout << "result_total=" << total << std::endl;
+  std::cout << "result_count=" << total << std::endl;
   foedus::Epoch commit_epoch;
   WRAP_ERROR_CODE(xct_manager->precommit_xct(context, &commit_epoch));
   WRAP_ERROR_CODE(xct_manager->wait_for_commit(commit_epoch));
@@ -64,9 +62,21 @@ foedus::ErrorStack my_read_proc(const foedus::proc::ProcArguments& args) {
 }
 
 int main(int argc, char** argv) {
+  // std::cout << "argc : " << argc << std::endl;
+  // for(int i=0; i<argc; ++i){
+  //   std::cout << "argv : " << argv[i] << std::endl;
+  // }
+  if(argc != 2) {
+    std::cout << "Usage: big_read <key-count>" << std::endl;
+    return EXIT_FAILURE;
+  }
+  uint64_t key_count = std::stoi(argv[1]);
+  std::cout << "key_count: " << key_count << std::endl;
   foedus::EngineOptions options;
   options.cache_.snapshot_cache_size_mb_per_node_ = 1 << 6;
   options.memory_.page_pool_size_mb_per_node_ = 1 << 6;
+  options.xct_.max_read_set_size_ = 1U << 20;
+  options.xct_.max_write_set_size_ = 1U << 20;
   foedus::Engine engine(options);
   engine.get_proc_manager()->pre_register(kWriteProc, my_write_proc);
   engine.get_proc_manager()->pre_register(kReadProc,  my_read_proc);
@@ -78,18 +88,26 @@ int main(int argc, char** argv) {
   COERCE_ERROR(engine.get_storage_manager()->create_storage(&meta, &create_epoch));
 
   foedus::thread::ImpersonateSession write_session;
-  const WriteInput input = {123, "abcXYZ", 7};
+  const WriteInput input = {key_count};
+  foedus::debugging::StopWatch write_duration;
   bool ret_write =
     engine.get_thread_pool()->impersonate(kWriteProc, &input, sizeof(input), &write_session);
   ASSERT_ND(ret_write);
   const foedus::ErrorStack result_write = write_session.get_result();
+  uint64_t write_nanosec = write_duration.stop();
+  // std::cout << "write duration [usec]=" << write_nanosec / 1000ULL << std::endl;
+  std::cout << "write duration [msec]=" << write_nanosec / 1000000ULL << std::endl;
   std::cout << "result_write=" << result_write << std::endl;
   write_session.release();
 
   foedus::thread::ImpersonateSession read_session;
-  bool ret_read = engine.get_thread_pool()->impersonate(kReadProc, &input.key, sizeof(input.key), &read_session);
+  foedus::debugging::StopWatch read_duration;
+  bool ret_read = engine.get_thread_pool()->impersonate(kReadProc, &key_count, sizeof(key_count), &read_session);
   ASSERT_ND(ret_read);
   foedus::ErrorStack result_read = read_session.get_result();
+  uint64_t read_nanosec = read_duration.stop();
+  // std::cout << "read duration [usec]=" << read_nanosec / 1000ULL << std::endl;
+  std::cout << "read duration [msec]=" << read_nanosec / 1000000ULL << std::endl;
   std::cout << "result_read=" << result_read << std::endl;
   std::cout << "output_size=" << read_session.get_output_size() << std::endl;
   const char* record = reinterpret_cast<const char*>(read_session.get_raw_output_buffer());

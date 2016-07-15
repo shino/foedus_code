@@ -30,10 +30,14 @@ foedus::ErrorStack my_write_proc(const foedus::proc::ProcArguments& args) {
   WRAP_ERROR_CODE(xct_manager->begin_xct(context, foedus::xct::kSerializable));
   const WriteInput* input = reinterpret_cast<const WriteInput*>(args.input_buffer_);
   std::cout << "write key_count=" << input->key_count << std::endl;
+  foedus::Epoch commit_epoch;
   for(uint64_t key=0ULL; key < input->key_count; ++key){
     WRAP_ERROR_CODE(array.overwrite_record(context, key, "xxxxx", 0, 5));
+    if(key % 1000 == 0) {
+      WRAP_ERROR_CODE(xct_manager->precommit_xct(context, &commit_epoch));
+      WRAP_ERROR_CODE(xct_manager->begin_xct(context, foedus::xct::kSerializable));
+    }
   }
-  foedus::Epoch commit_epoch;
   WRAP_ERROR_CODE(xct_manager->precommit_xct(context, &commit_epoch));
   WRAP_ERROR_CODE(xct_manager->wait_for_commit(commit_epoch));
   return foedus::kRetOk;

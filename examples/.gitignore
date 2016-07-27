@@ -1,3 +1,5 @@
 logs/
 savepoint.xml
+savepoint.xml.tmp_*
+snapshots/
 *.log
